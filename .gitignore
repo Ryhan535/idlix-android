@@ -1,0 +1,33 @@
+# Built outputs
+*.apk
+*.aar
+*.aab
+*.dex
+*.class
+**/build/
+.gradle/
+
+# Android Studio & IDE files
+.idea/
+*.iml
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+*.hprof
+
+# Local configuration files
+local.properties
+
+# Keystore & Signing files
+*.keystore
+*.jks
+*.p12
+*.pem
+
+# OS & System files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
