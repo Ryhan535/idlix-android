@@ -20,6 +20,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -105,10 +106,7 @@ class IdlixStreamScraper(
     }
 
     suspend fun getEpisodeStream(slug: String, season: Int, episode: Int): StreamResult = withContext(Dispatchers.IO) {
-        val nativeStream = fetchNativeApiStream(
-            "/api/series/$slug/season/$season/episode/$episode/stream",
-            "/api/serieses/$slug/season/$season/episode/$episode/stream"
-        )
+        val nativeStream = fetchNativeApiStream("/api/series/$slug/season/$season/episode/$episode/stream")
         if (nativeStream != null) return@withContext nativeStream
 
         withContext(Dispatchers.Main) {
@@ -244,72 +242,81 @@ class IdlixStreamScraper(
     }
 
     private fun resolveMovieUuid(slug: String, cookies: String, referer: String): String? {
-        val paths = listOf("/api/movie/$slug", "/api/movies/$slug")
+        val path = "/api/movie/$slug"
         val baseUrls = listOf(baseUrl, AppConfig.WEBSITE_BASE_URL).distinct()
         for (base in baseUrls) {
-            for (path in paths) {
-                try {
-                    val req = Request.Builder()
-                        .url("$base$path")
-                        .header("Cookie", cookies)
-                        .header("Referer", referer)
-                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
-                        .build()
+            try {
+                val req = Request.Builder()
+                    .url("$base$path")
+                    .header("Cookie", cookies)
+                    .header("Referer", referer)
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
+                    .build()
 
-                    val res = okHttpClient.newCall(req).execute()
-                    if (res.isSuccessful) {
-                        val body = res.body?.string()
-                        res.close()
-                        if (!body.isNullOrEmpty()) {
-                            val json = JSONObject(body)
-                            val id = if (json.has("id")) json.optString("id") else (json.optJSONObject("data")?.optString("id") ?: "")
-                            if (id.isNotEmpty()) return id
-                        }
-                    } else {
-                        res.close()
+                val res = okHttpClient.newCall(req).execute()
+                if (res.isSuccessful) {
+                    val body = res.body?.string()
+                    res.close()
+                    if (!body.isNullOrEmpty()) {
+                        val json = JSONObject(body)
+                        val id = if (json.has("id")) json.optString("id") else (json.optJSONObject("data")?.optString("id") ?: "")
+                        if (id.isNotEmpty()) return id
                     }
-                } catch (_: Exception) {}
-            }
+                } else {
+                    res.close()
+                }
+            } catch (_: Exception) {}
         }
         return null
     }
 
     private fun resolveEpisodeUuid(slug: String, season: Int, episode: Int, cookies: String, referer: String): String? {
-        val paths = listOf("/api/series/$slug/season/$season", "/api/serieses/$slug/season/$season")
+        val path = "/api/series/$slug/season/$season"
         val baseUrls = listOf(baseUrl, AppConfig.WEBSITE_BASE_URL).distinct()
         for (base in baseUrls) {
-            for (path in paths) {
-                try {
-                    val req = Request.Builder()
-                        .url("$base$path")
-                        .header("Cookie", cookies)
-                        .header("Referer", referer)
-                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
-                        .build()
+            try {
+                val req = Request.Builder()
+                    .url("$base$path")
+                    .header("Cookie", cookies)
+                    .header("Referer", referer)
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
+                    .build()
 
-                    val res = okHttpClient.newCall(req).execute()
-                    if (res.isSuccessful) {
-                        val body = res.body?.string()
-                        res.close()
-                        if (!body.isNullOrEmpty()) {
-                            val json = JSONObject(body)
-                            val seasonObj = if (json.has("season")) json.optJSONObject("season") else json.optJSONObject("data")?.optJSONObject("season")
-                            val eps = seasonObj?.optJSONArray("episodes")
-                            if (eps != null) {
-                                for (i in 0 until eps.length()) {
-                                    val ep = eps.getJSONObject(i)
-                                    if (ep.optInt("episodeNumber") == episode) {
-                                        val epId = ep.optString("id", "")
-                                        if (epId.isNotEmpty()) return epId
-                                    }
+                val res = okHttpClient.newCall(req).execute()
+                if (res.isSuccessful) {
+                    val body = res.body?.string()
+                    res.close()
+                    if (!body.isNullOrEmpty()) {
+                        val json = JSONObject(body)
+                        var eps: JSONArray? = null
+                        if (json.has("data")) {
+                            eps = json.optJSONArray("data")
+                            if (eps == null) {
+                                eps = json.optJSONObject("data")?.optJSONArray("episodes")
+                            }
+                        }
+                        if (eps == null && json.has("episodes")) {
+                            eps = json.optJSONArray("episodes")
+                        }
+                        if (eps == null && json.has("season")) {
+                            eps = json.optJSONObject("season")?.optJSONArray("episodes")
+                        }
+
+                        if (eps != null) {
+                            for (i in 0 until eps.length()) {
+                                val ep = eps.getJSONObject(i)
+                                val epNum = ep.optInt("episodeNumber", ep.optInt("episode", i + 1))
+                                if (epNum == episode) {
+                                    val epId = ep.optString("id", ep.optString("_id", ""))
+                                    if (epId.isNotEmpty()) return epId
                                 }
                             }
                         }
-                    } else {
-                        res.close()
                     }
-                } catch (_: Exception) {}
-            }
+                } else {
+                    res.close()
+                }
+            } catch (_: Exception) {}
         }
         return null
     }

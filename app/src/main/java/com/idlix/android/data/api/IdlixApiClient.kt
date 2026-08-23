@@ -81,57 +81,94 @@ class IdlixApiClient(
         return false
     }
 
+    private fun parseItemList(array: JSONArray?): List<MovieItem> {
+        val list = mutableListOf<MovieItem>()
+        if (array != null) {
+            for (i in 0 until array.length()) {
+                val item = array.getJSONObject(i)
+                val title = item.optString("title", item.optString("name", ""))
+                val slug = item.optString("slug", "")
+                val poster = item.optString("poster", item.optString("posterPath", ""))
+                val type = if (isSeriesType(item)) "series" else "movie"
+                val year = item.optInt("year", 0)
+
+                if (title.isNotEmpty() && slug.isNotEmpty()) {
+                    list.add(MovieItem(title, slug, fixImageUrl(poster), type, if (year > 0) year else null))
+                }
+            }
+        }
+        return list
+    }
+
     suspend fun fetchHomepageSections(): Map<String, List<MovieItem>> = withContext(Dispatchers.IO) {
-        val result = mutableMapOf<String, List<MovieItem>>()
-        try {
-            // Mencoba rute API v3: /api/home/sections, /api/home, /api/featured, /api/homepage
-            val body = tryExecute("/api/home/sections", "/api/home", "/api/featured", "/api/homepage") ?: return@withContext result
-            val json = JSONObject(body)
+        val result = LinkedHashMap<String, List<MovieItem>>()
 
-            val parseSection = { sectionName: String, array: JSONArray? ->
-                if (array != null) {
-                    val list = mutableListOf<MovieItem>()
-                    for (i in 0 until array.length()) {
-                        val item = array.getJSONObject(i)
-                        val title = item.optString("title", item.optString("name", ""))
-                        val slug = item.optString("slug", "")
-                        val poster = item.optString("poster", item.optString("posterPath", ""))
-                        val type = if (isSeriesType(item)) "series" else "movie"
-                        val year = item.optInt("year", 0)
-
-                        if (title.isNotEmpty() && slug.isNotEmpty()) {
-                            list.add(MovieItem(title, slug, fixImageUrl(poster), type, if (year > 0) year else null))
+        // 1. Fetch /api/home/sections (Grouped Sections)
+        val sectionsBody = tryExecute("/api/home/sections")
+        if (!sectionsBody.isNullOrEmpty()) {
+            try {
+                val json = JSONObject(sectionsBody)
+                val dataObj = if (json.has("data") && json.optJSONObject("data") != null) json.optJSONObject("data") else json
+                if (dataObj != null) {
+                    val keys = dataObj.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        val arr = dataObj.optJSONArray(key)
+                        if (arr != null) {
+                            val items = parseItemList(arr)
+                            if (items.isNotEmpty()) {
+                                val sectionTitle = when (key.lowercase()) {
+                                    "featured" -> "Featured Content"
+                                    "cinemaxxi" -> "Cinema XXI"
+                                    "trending" -> "Trending Now"
+                                    "latestmovies", "latest_movies" -> "Latest Movies"
+                                    "latestseries", "latest_series" -> "Latest TV Series"
+                                    else -> key.replace("_", " ").replaceFirstChar { it.uppercase() }
+                                }
+                                result[sectionTitle] = items
+                            }
                         }
                     }
-                    if (list.isNotEmpty()) {
-                        result[sectionName] = list
-                    }
                 }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-
-            if (json.has("above")) {
-                val above = json.getJSONArray("above")
-                for (i in 0 until above.length()) {
-                    val sec = above.getJSONObject(i)
-                    val secTitle = sec.optString("title", "Section $i")
-                    val items = sec.optJSONArray("data")
-                    parseSection(secTitle, items)
-                }
-            } else if (json.has("sections")) {
-                val sections = json.getJSONObject("sections")
-                val keys = sections.keys()
-                while (keys.hasNext()) {
-                    val key = keys.next()
-                    val arr = sections.optJSONArray(key)
-                    parseSection(key.replaceFirstChar { it.uppercase() }, arr)
-                }
-            } else if (json.has("data")) {
-                val data = json.optJSONArray("data")
-                parseSection("Popular Movies & Series", data)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
+
+        // 2. Fetch /api/cinemaxxi (CinemaXXI Movies)
+        if (!result.containsKey("Cinema XXI") && !result.containsKey("CinemaXXI")) {
+            val cxxiBody = tryExecute("/api/cinemaxxi")
+            if (!cxxiBody.isNullOrEmpty()) {
+                try {
+                    val json = JSONObject(cxxiBody)
+                    val arr = json.optJSONArray("data") ?: (if (json.has("results")) json.optJSONArray("results") else null)
+                    val items = parseItemList(arr)
+                    if (items.isNotEmpty()) {
+                        result["Cinema XXI"] = items
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+
+        // 3. Fetch /api/home (Flat Feed fallback)
+        if (result.isEmpty()) {
+            val homeBody = tryExecute("/api/home", "/api/featured", "/api/homepage")
+            if (!homeBody.isNullOrEmpty()) {
+                try {
+                    val json = JSONObject(homeBody)
+                    val arr = json.optJSONArray("data") ?: (if (json.has("results")) json.optJSONArray("results") else null)
+                    val items = parseItemList(arr)
+                    if (items.isNotEmpty()) {
+                        result["Home Feed"] = items
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+
         return@withContext result
     }
 
@@ -169,8 +206,7 @@ class IdlixApiClient(
         try {
             val body = tryExecute(
                 "/api/series?page=$page&limit=36&sort=createdAt",
-                "/api/series/trending",
-                "/api/serieses?page=$page&limit=36&sort=createdAt"
+                "/api/series/trending"
             ) ?: return@withContext list
 
             val json = JSONObject(body)
@@ -219,10 +255,7 @@ class IdlixApiClient(
 
     suspend fun fetchMovieDetail(slug: String): MovieDetail? = withContext(Dispatchers.IO) {
         try {
-            val body = tryExecute(
-                "/api/movie/$slug",
-                "/api/movies/$slug"
-            ) ?: return@withContext null
+            val body = tryExecute("/api/movie/$slug") ?: return@withContext null
 
             val json = JSONObject(body)
             val data = if (json.has("data")) json.getJSONObject("data") else json
@@ -272,10 +305,7 @@ class IdlixApiClient(
 
     suspend fun fetchSeriesDetail(slug: String): SeriesDetail? = withContext(Dispatchers.IO) {
         try {
-            val body = tryExecute(
-                "/api/series/$slug",
-                "/api/serieses/$slug"
-            ) ?: return@withContext null
+            val body = tryExecute("/api/series/$slug") ?: return@withContext null
 
             val json = JSONObject(body)
             val data = if (json.has("data")) json.getJSONObject("data") else json
