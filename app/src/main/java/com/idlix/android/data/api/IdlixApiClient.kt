@@ -1,5 +1,6 @@
 package com.idlix.android.data.api
 
+import com.idlix.android.config.AppConfig
 import com.idlix.android.data.model.EpisodeItem
 import com.idlix.android.data.model.MovieDetail
 import com.idlix.android.data.model.MovieItem
@@ -14,7 +15,7 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 class IdlixApiClient(
-    val baseUrl: String = "https://z2.idlixku.com"
+    val baseUrl: String = AppConfig.getNormalizedApiBaseUrl()
 ) {
     val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)

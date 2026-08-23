@@ -1,13 +1,12 @@
 @echo off
-set "JAVA_HOME=C:\Program Files\Java\jdk-17"
-set "ANDROID_HOME=D:\Development\AndoidSDK"
-set "GRADLE_EXEC=C:\Users\Koko\.gradle\wrapper\dists\gradle-8.7-bin\bhs2wmbdwecv87pi65oeuq5iu\gradle-8.7\bin\gradle.bat"
+set "JAVA_HOME=C:\Program Files\Android\Android Studio2\jbr"
+set "ANDROID_HOME=D:\Development\AndroidSDK"
 
 echo =========================================
 echo Building IDLIX Android APK...
 echo =========================================
 
-"%GRADLE_EXEC%" assembleDebug %*
+call gradlew.bat assembleDebug %*
 
 if %ERRORLEVEL% EQU 0 (
     echo.

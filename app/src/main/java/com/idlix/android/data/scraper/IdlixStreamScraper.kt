@@ -10,6 +10,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.idlix.android.config.AppConfig
 import com.idlix.android.data.model.StreamResult
 import com.idlix.android.data.model.SubtitleTrack
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +26,8 @@ import kotlin.coroutines.resume
 
 class IdlixStreamScraper(
     private val context: Context,
-    private val baseUrl: String = "https://z2.idlixku.com"
+    private val baseUrl: String = AppConfig.getNormalizedApiBaseUrl(),
+    private val webSiteBaseUrl: String = AppConfig.WEBSITE_BASE_URL
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val okHttpClient = OkHttpClient.Builder()
@@ -37,12 +39,12 @@ class IdlixStreamScraper(
      * Extract stream URL for a movie or episode using background WebView + Native OkHttp
      */
     suspend fun getMovieStream(slug: String): StreamResult = withContext(Dispatchers.Main) {
-        val pageUrl = "$baseUrl/movie/$slug"
+        val pageUrl = "$webSiteBaseUrl/movie/$slug"
         return@withContext extractStreamChain(pageUrl, "movie", slug)
     }
 
     suspend fun getEpisodeStream(slug: String, season: Int, episode: Int): StreamResult = withContext(Dispatchers.Main) {
-        val pageUrl = "$baseUrl/series/$slug/season/$season/episode/$episode"
+        val pageUrl = "$webSiteBaseUrl/series/$slug/season/$season/episode/$episode"
         return@withContext extractStreamChain(pageUrl, "episode", slug, season, episode)
     }
 
