@@ -172,7 +172,10 @@ fun DetailScreen(
                                 isExtractingStream = true
                                 extractionProgressText = "Connecting to stream server..."
                                 coroutineScope.launch {
-                                    val streamRes = scraper.getMovieStream(slug)
+                                    var streamRes = apiClient.fetchMovieStream(slug)
+                                    if (streamRes.streamUrl.isNullOrEmpty()) {
+                                        streamRes = scraper.getMovieStream(slug)
+                                    }
                                     isExtractingStream = false
                                     if (!streamRes.streamUrl.isNullOrEmpty()) {
                                         launchPlayer(context, title, streamRes.streamUrl, streamRes.subtitles)
@@ -296,7 +299,10 @@ fun DetailScreen(
                                         isExtractingStream = true
                                         extractionProgressText = "Extracting Episode ${episode.episodeNumber}..."
                                         coroutineScope.launch {
-                                            val streamRes = scraper.getEpisodeStream(slug, currentSeason.seasonNumber, episode.episodeNumber)
+                                            var streamRes = apiClient.fetchEpisodeStream(slug, currentSeason.seasonNumber, episode.episodeNumber)
+                                            if (streamRes.streamUrl.isNullOrEmpty()) {
+                                                streamRes = scraper.getEpisodeStream(slug, currentSeason.seasonNumber, episode.episodeNumber)
+                                            }
                                             isExtractingStream = false
                                             if (!streamRes.streamUrl.isNullOrEmpty()) {
                                                 launchPlayer(context, "$title - S${currentSeason.seasonNumber}E${episode.episodeNumber}", streamRes.streamUrl, streamRes.subtitles)

@@ -6,6 +6,8 @@ import com.idlix.android.data.model.MovieDetail
 import com.idlix.android.data.model.MovieItem
 import com.idlix.android.data.model.SeasonData
 import com.idlix.android.data.model.SeriesDetail
+import com.idlix.android.data.model.StreamResult
+import com.idlix.android.data.model.SubtitleTrack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -362,6 +364,77 @@ class IdlixApiClient(
         }
     }
 
+    suspend fun fetchMovieStream(slug: String): StreamResult = withContext(Dispatchers.IO) {
+        try {
+            val body = tryExecute("/api/movie/$slug/stream")
+                ?: return@withContext StreamResult(null, error = "Failed to connect to API stream endpoint")
+            return@withContext parseStreamResponse(body)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return@withContext StreamResult(null, error = e.message)
+        }
+    }
+
+    suspend fun fetchEpisodeStream(slug: String, season: Int, episode: Int): StreamResult = withContext(Dispatchers.IO) {
+        try {
+            val body = tryExecute("/api/series/$slug/season/$season/episode/$episode/stream")
+                ?: return@withContext StreamResult(null, error = "Failed to connect to API stream endpoint")
+            return@withContext parseStreamResponse(body)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return@withContext StreamResult(null, error = e.message)
+        }
+    }
+
+    private fun parseStreamResponse(body: String): StreamResult {
+        try {
+            val json = JSONObject(body)
+            val data = if (json.has("data")) json.optJSONObject("data") else json
+            if (data != null) {
+                val streamUrl = data.optString(
+                    "stream_url",
+                    data.optString(
+                        "streamUrl",
+                        data.optString(
+                            "url",
+                            data.optString(
+                                "m3u8",
+                                data.optString(
+                                    "embed_url",
+                                    data.optString("embedUrl", data.optString("iframe_url", ""))
+                                )
+                            )
+                        )
+                    )
+                )
+
+                val subtitles = mutableListOf<SubtitleTrack>()
+                val subsArr = data.optJSONArray("subtitles") ?: data.optJSONArray("vtt_tracks") ?: data.optJSONArray("captions")
+                if (subsArr != null) {
+                    for (i in 0 until subsArr.length()) {
+                        val subObj = subsArr.optJSONObject(i)
+                        if (subObj != null) {
+                            val subUrl = subObj.optString("file", subObj.optString("url", subObj.optString("src", "")))
+                            val lang = subObj.optString("lang", subObj.optString("language", "id"))
+                            val label = subObj.optString("label", subObj.optString("language", "Subtitle ${i + 1}"))
+                            if (subUrl.isNotEmpty()) {
+                                subtitles.add(SubtitleTrack(lang = lang, label = label, url = subUrl))
+                            }
+                        }
+                    }
+                }
+
+                if (streamUrl.isNotEmpty()) {
+                    return StreamResult(streamUrl = streamUrl, subtitles = subtitles)
+                }
+            }
+            val errorMsg = json.optString("error", "Stream URL empty in API response")
+            return StreamResult(null, error = errorMsg)
+        } catch (e: Exception) {
+            return StreamResult(null, error = "Failed to parse API stream response: ${e.message}")
+        }
+    }
+
     private fun fixImageUrl(url: String?): String? {
         if (url.isNullOrEmpty()) return null
         if (url.startsWith("http")) return url
@@ -370,3 +443,4 @@ class IdlixApiClient(
         return url
     }
 }
+

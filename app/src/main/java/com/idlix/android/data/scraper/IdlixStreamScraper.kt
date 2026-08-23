@@ -213,19 +213,25 @@ class IdlixStreamScraper(
                         var playInfo = getPlayInfo(apiContentType, uuid, cookies, pageUrl)
                         var gateToken = extractGateToken(playInfo)
                         
-                        // If gateToken is missing on first load, wait for JS cookies to settle & retry once
-                        if (gateToken.isNullOrEmpty()) {
+                        // Poll up to 6 times (6 seconds max) for JS environment & cookies to settle on cold load
+                        var attempts = 0
+                        while (gateToken.isNullOrEmpty() && attempts < 6) {
+                            attempts++
                             Thread.sleep(1000)
                             mainHandler.post { cookieManager.flush() }
                             cookies = cookieManager.getCookie(pageUrl) ?: ""
                             trackView(type, uuid, cookies, pageUrl)
                             playInfo = getPlayInfo(apiContentType, uuid, cookies, pageUrl)
                             gateToken = extractGateToken(playInfo)
-                        }
 
-                        if (gateToken.isNullOrEmpty() && type != "movie") {
-                            playInfo = getPlayInfo("tv", uuid, cookies, pageUrl)
-                            gateToken = extractGateToken(playInfo)
+                            if (gateToken.isNullOrEmpty() && type != "movie") {
+                                val tvPlayInfo = getPlayInfo("tv", uuid, cookies, pageUrl)
+                                val tvToken = extractGateToken(tvPlayInfo)
+                                if (!tvToken.isNullOrEmpty()) {
+                                    playInfo = tvPlayInfo
+                                    gateToken = tvToken
+                                }
+                            }
                         }
 
                         if (gateToken.isNullOrEmpty()) {
