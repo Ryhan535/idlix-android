@@ -16,7 +16,9 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.hls.HlsMediaSource
+import com.idlix.android.config.AppConfig
+import com.idlix.android.data.model.SubtitleTrack
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 
 @OptIn(UnstableApi::class)
@@ -54,7 +56,13 @@ class PlayerActivity : ComponentActivity() {
 
         val streamUrl = intent.getStringExtra(EXTRA_STREAM_URL)
         val title = intent.getStringExtra(EXTRA_TITLE)
-        val subtitles = intent.getStringArrayListExtra(EXTRA_SUBTITLES) ?: arrayListOf()
+        
+        @Suppress("DEPRECATION", "UNCHECKED_CAST")
+        val subtitles = (if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            intent.getSerializableExtra(EXTRA_SUBTITLES, ArrayList::class.java) as? ArrayList<SubtitleTrack>
+        } else {
+            intent.getSerializableExtra(EXTRA_SUBTITLES) as? ArrayList<SubtitleTrack>
+        }) ?: arrayListOf()
 
         if (streamUrl.isNullOrEmpty()) {
             Toast.makeText(this as Context, "Invalid stream URL", Toast.LENGTH_SHORT).show()
@@ -65,41 +73,78 @@ class PlayerActivity : ComponentActivity() {
         initializePlayer(streamUrl, subtitles)
     }
 
-    private fun initializePlayer(streamUrl: String, subtitleUrls: List<String>) {
+    private fun initializePlayer(streamUrl: String, subtitles: List<SubtitleTrack>) {
+        val defaultHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+            "Referer" to "${AppConfig.WEBSITE_BASE_URL}/",
+            "Origin" to AppConfig.WEBSITE_BASE_URL
+        )
+
         val dataSourceFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
+            .setUserAgent("Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+            .setDefaultRequestProperties(defaultHeaders)
             .setAllowCrossProtocolRedirects(true)
 
         val mediaItemBuilder = MediaItem.Builder()
             .setUri(Uri.parse(streamUrl))
 
-        // Add WebVTT subtitles if available
-        if (subtitleUrls.isNotEmpty()) {
-            val subtitleConfigs = subtitleUrls.map { subUrl ->
-                MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
-                    .setMimeType(MimeTypes.TEXT_VTT)
-                    .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+        // Force HLS MimeType for non-MP4 streams so ExoPlayer doesn't default to Progressive MP4 parser
+        if (!streamUrl.endsWith(".mp4", ignoreCase = true) && !streamUrl.contains(".mp4?")) {
+            mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
+        }
+
+        val validSubtitles = subtitles.filter { it.url.startsWith("http") }
+        if (validSubtitles.isNotEmpty()) {
+            val subtitleConfigs = validSubtitles.map { subTrack ->
+                val mimeType = when {
+                    subTrack.url.endsWith(".srt", ignoreCase = true) || subTrack.url.contains(".srt?") -> MimeTypes.APPLICATION_SUBRIP
+                    else -> MimeTypes.TEXT_VTT
+                }
+
+                val isIndo = subTrack.lang.lowercase().contains("id") || 
+                             subTrack.label.lowercase().contains("indo") || 
+                             subTrack.label.lowercase().contains("id")
+
+                MediaItem.SubtitleConfiguration.Builder(Uri.parse(subTrack.url))
+                    .setMimeType(mimeType)
+                    .setLanguage(subTrack.lang.ifEmpty { "id" })
+                    .setLabel(subTrack.label.ifEmpty { "Indonesia" })
+                    .setSelectionFlags(if (isIndo) C.SELECTION_FLAG_DEFAULT else 0)
                     .build()
             }
             mediaItemBuilder.setSubtitleConfigurations(subtitleConfigs)
         }
 
         val mediaItem = mediaItemBuilder.build()
-        val hlsMediaSource = HlsMediaSource.Factory(dataSourceFactory)
-            .createMediaSource(mediaItem)
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+        val mediaSource = mediaSourceFactory.createMediaSource(mediaItem)
 
-        exoPlayer = ExoPlayer.Builder(this as Context).build().apply {
-            setMediaSource(hlsMediaSource)
-            prepare()
-            playWhenReady = true
-            addListener(object : Player.Listener {
-                override fun onPlayerError(error: PlaybackException) {
-                    Toast.makeText(this@PlayerActivity as Context, "Playback error: ${error.message}", Toast.LENGTH_LONG).show()
-                }
-            })
+        exoPlayer = ExoPlayer.Builder(this as Context)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .build().apply {
+                setMediaSource(mediaSource)
+                prepare()
+                playWhenReady = true
+                addListener(object : Player.Listener {
+                    override fun onPlayerError(error: PlaybackException) {
+                        if (validSubtitles.isNotEmpty()) {
+                            Toast.makeText(this@PlayerActivity as Context, "Subtitle network error, falling back to main stream...", Toast.LENGTH_SHORT).show()
+                            exoPlayer?.release()
+                            exoPlayer = null
+                            initializePlayer(streamUrl, emptyList())
+                            return
+                        }
+                        val causeMsg = error.cause?.message ?: error.message
+                        Toast.makeText(this@PlayerActivity as Context, "Playback error: $causeMsg", Toast.LENGTH_LONG).show()
+                    }
+                })
+            }
+
+        playerView?.apply {
+            player = exoPlayer
+            subtitleView?.setUserDefaultStyle()
+            subtitleView?.setUserDefaultTextSize()
         }
-
-        playerView?.player = exoPlayer
     }
 
     override fun onPause() {

@@ -61,25 +61,9 @@ class IdlixStreamScraper(
                         if (!body.isNullOrEmpty()) {
                             val json = JSONObject(body)
                             val data = if (json.has("data")) json.getJSONObject("data") else json
-                            val streamUrl = data.optString("streamUrl", data.optString("url", data.optString("stream_url", "")))
-                            if (streamUrl.isNotEmpty() && streamUrl.startsWith("http")) {
-                                val subsList = mutableListOf<SubtitleTrack>()
-                                val subsArr = data.optJSONArray("subtitles") ?: data.optJSONArray("captions")
-                                if (subsArr != null) {
-                                    for (i in 0 until subsArr.length()) {
-                                        val s = subsArr.getJSONObject(i)
-                                        val subUrl = s.optString("url", s.optString("file", ""))
-                                        if (subUrl.isNotEmpty()) {
-                                            subsList.add(
-                                                SubtitleTrack(
-                                                    lang = s.optString("lang", s.optString("label", "ID")),
-                                                    label = s.optString("label", s.optString("lang", "Indonesia")),
-                                                    url = subUrl
-                                                )
-                                            )
-                                        }
-                                    }
-                                }
+                            val streamUrl = extractPlayDataStreamUrl(data) ?: data.optString("streamUrl", data.optString("url", data.optString("stream_url", "")))
+                            if (streamUrl.isNotEmpty() && streamUrl.startsWith("http") && !streamUrl.contains("/embed/") && !streamUrl.contains("/e/") && !streamUrl.endsWith(".html")) {
+                                val subsList = parseSubtitles(data, base)
                                 return StreamResult(streamUrl = streamUrl, subtitles = subsList)
                             }
                         }
@@ -90,6 +74,68 @@ class IdlixStreamScraper(
             }
         }
         return null
+    }
+
+    /**
+     * Helper untuk mengekstrak subtitle secara komprehensif dari JSON
+     */
+    private fun parseSubtitles(jsonObj: JSONObject?, fallbackBaseUrl: String): List<SubtitleTrack> {
+        if (jsonObj == null) return emptyList()
+        val subsList = mutableListOf<SubtitleTrack>()
+
+        val keysToTry = listOf("subtitles", "captions", "tracks", "subs")
+        for (key in keysToTry) {
+            val subsArr = jsonObj.optJSONArray(key)
+            if (subsArr != null) {
+                for (i in 0 until subsArr.length()) {
+                    val item = subsArr.opt(i)
+                    if (item is JSONObject) {
+                        val subUrl = item.optString("url", item.optString("file", item.optString("src", item.optString("link", item.optString("path", "")))))
+                        if (subUrl.isNotEmpty()) {
+                            val fixedUrl = formatSubUrl(subUrl, fallbackBaseUrl)
+                            val lang = item.optString("lang", item.optString("language", item.optString("srclang", item.optString("id", "id"))))
+                            val label = item.optString("label", item.optString("name", item.optString("title", item.optString("lang", "Indonesia"))))
+                            subsList.add(SubtitleTrack(lang = lang, label = label, url = fixedUrl))
+                        }
+                    } else if (item is String && item.isNotEmpty()) {
+                        val fixedUrl = formatSubUrl(item, fallbackBaseUrl)
+                        subsList.add(SubtitleTrack(lang = "id", label = "Indonesia", url = fixedUrl))
+                    }
+                }
+                if (subsList.isNotEmpty()) return subsList
+            }
+
+            val subsObj = jsonObj.optJSONObject(key)
+            if (subsObj != null) {
+                val keys = subsObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val valObj = subsObj.opt(k)
+                    if (valObj is String && valObj.isNotEmpty()) {
+                        val fixedUrl = formatSubUrl(valObj, fallbackBaseUrl)
+                        subsList.add(SubtitleTrack(lang = k, label = k.replaceFirstChar { it.uppercase() }, url = fixedUrl))
+                    } else if (valObj is JSONObject) {
+                        val subUrl = valObj.optString("url", valObj.optString("file", valObj.optString("src", "")))
+                        if (subUrl.isNotEmpty()) {
+                            val fixedUrl = formatSubUrl(subUrl, fallbackBaseUrl)
+                            val label = valObj.optString("label", k.replaceFirstChar { it.uppercase() })
+                            val lang = valObj.optString("lang", k)
+                            subsList.add(SubtitleTrack(lang = lang, label = label, url = fixedUrl))
+                        }
+                    }
+                }
+                if (subsList.isNotEmpty()) return subsList
+            }
+        }
+        return subsList
+    }
+
+    private fun formatSubUrl(rawUrl: String, fallbackBaseUrl: String): String {
+        val trimmed = rawUrl.trim()
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
+        if (trimmed.startsWith("//")) return "https:$trimmed"
+        val base = AppConfig.normalizeUrl(fallbackBaseUrl)
+        return if (trimmed.startsWith("/")) "$base$trimmed" else "$base/$trimmed"
     }
 
     /**
@@ -161,51 +207,49 @@ class IdlixStreamScraper(
                         }
 
                         trackView(type, uuid, cookies, pageUrl)
-                        val playInfo = getPlayInfo(type, uuid, cookies, pageUrl)
-                        val gateToken = playInfo?.optString("gateToken", null)
+                        
+                        val apiContentType = if (type == "movie") "movie" else "series"
+                        var playInfo = getPlayInfo(apiContentType, uuid, cookies, pageUrl)
+                        var gateToken = extractGateToken(playInfo)
+                        
+                        if (gateToken.isNullOrEmpty() && type != "movie") {
+                            playInfo = getPlayInfo("tv", uuid, cookies, pageUrl)
+                            gateToken = extractGateToken(playInfo)
+                        }
 
                         if (gateToken.isNullOrEmpty()) {
                             if (!isFinished) {
                                 isFinished = true
                                 cleanup()
-                                continuation.resume(StreamResult(null, error = "Failed to obtain play token"))
+                                continuation.resume(StreamResult(null, error = "Failed to obtain play token (invalid gateToken)"))
                             }
                             return@Thread
                         }
 
                         val claimResult = claimSession(gateToken, cookies, pageUrl)
-                        val claim = claimResult?.optString("claim", null)
-                        val redeemUrl = claimResult?.optString("redeemUrl", null)
+                        val claim = extractField(claimResult, "claim")
+                        val redeemUrl = extractField(claimResult, "redeemUrl")
 
                         if (claim.isNullOrEmpty() || redeemUrl.isNullOrEmpty()) {
+                            val errMsg = if (claimResult != null && claimResult.has("message")) claimResult.optString("message") else (if (claimResult != null && claimResult.has("error")) claimResult.optString("error") else "Failed to claim stream session")
                             if (!isFinished) {
                                 isFinished = true
                                 cleanup()
-                                continuation.resume(StreamResult(null, error = "Failed to claim stream session"))
+                                continuation.resume(StreamResult(null, error = errMsg))
                             }
                             return@Thread
                         }
 
-                        val playData = redeemClaim(redeemUrl, claim)
-                        val streamUrl = if (playData != null && playData.has("url")) playData.optString("url") else null
+                        val playData = redeemClaim(redeemUrl!!, claim!!)
+                        val streamUrl = extractPlayDataStreamUrl(playData)
 
                         if (!streamUrl.isNullOrEmpty()) {
-                            val subsList = mutableListOf<SubtitleTrack>()
-                            val subsArr = playData?.optJSONArray("subtitles")
-                            if (subsArr != null) {
-                                for (i in 0 until subsArr.length()) {
-                                    val s = subsArr.getJSONObject(i)
-                                    val subUrl = if (s.has("url")) s.optString("url") else ""
-                                    if (subUrl.isNotEmpty()) {
-                                        subsList.add(
-                                            SubtitleTrack(
-                                                lang = if (s.has("lang")) s.optString("lang") else "ID",
-                                                label = if (s.has("label")) s.optString("label") else "Indonesia",
-                                                url = subUrl
-                                            )
-                                        )
-                                    }
-                                }
+                            var subsList = parseSubtitles(playData, baseUrl)
+                            if (subsList.isEmpty()) {
+                                subsList = parseSubtitles(claimResult, baseUrl)
+                            }
+                            if (subsList.isEmpty()) {
+                                subsList = parseSubtitles(playInfo, baseUrl)
                             }
 
                             if (!isFinished) {
@@ -215,8 +259,8 @@ class IdlixStreamScraper(
                                     StreamResult(
                                         streamUrl = streamUrl,
                                         subtitles = subsList,
-                                        videoId = if (playData?.has("videoId") == true) playData.optString("videoId") else null,
-                                        title = if (claimResult?.has("title") == true) claimResult.optString("title") else null
+                                        videoId = extractField(playData, "videoId"),
+                                        title = extractField(claimResult, "title")
                                     )
                                 )
                             }
@@ -387,5 +431,47 @@ class IdlixStreamScraper(
         val res = okHttpClient.newCall(req).execute()
         val resBody = res.body?.string() ?: return null
         return JSONObject(resBody)
+    }
+
+    private fun extractGateToken(playInfo: JSONObject?): String? {
+        if (playInfo == null) return null
+        var token = playInfo.optString("gateToken", playInfo.optString("token", playInfo.optString("playToken", "")))
+        if (token.isEmpty() && playInfo.has("data")) {
+            val data = playInfo.optJSONObject("data")
+            if (data != null) {
+                token = data.optString("gateToken", data.optString("token", data.optString("playToken", "")))
+            }
+        }
+        return if (token.isNotEmpty()) token else null
+    }
+
+    private fun extractField(json: JSONObject?, key: String): String? {
+        if (json == null) return null
+        var valStr = json.optString(key, "")
+        if (valStr.isEmpty() && json.has("data")) {
+            val data = json.optJSONObject("data")
+            if (data != null) {
+                valStr = data.optString(key, "")
+            }
+        }
+        return if (valStr.isNotEmpty()) valStr else null
+    }
+
+    private fun extractPlayDataStreamUrl(playData: JSONObject?): String? {
+        if (playData == null) return null
+        var url = playData.optString("url", playData.optString("streamUrl", playData.optString("file", playData.optString("stream_url", "")))).trim()
+        if (url.isEmpty() && playData.has("data")) {
+            val data = playData.optJSONObject("data")
+            if (data != null) {
+                url = data.optString("url", data.optString("streamUrl", data.optString("file", data.optString("stream_url", "")))).trim()
+            }
+        }
+        if (url.isEmpty()) return null
+        if (url.startsWith("//")) return "https:$url"
+        if (url.startsWith("/")) {
+            val normalizedBase = AppConfig.normalizeUrl(baseUrl)
+            return "$normalizedBase$url"
+        }
+        return if (url.startsWith("http")) url else null
     }
 }

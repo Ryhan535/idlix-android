@@ -54,7 +54,7 @@ data class SubtitleTrack(
     val lang: String,
     val label: String,
     val url: String
-)
+) : java.io.Serializable
 
 data class StreamResult(
     val streamUrl: String?,

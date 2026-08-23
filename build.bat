@@ -1,6 +1,6 @@
 @echo off
-set "JAVA_HOME=C:\Program Files\Android\Android Studio2\jbr"
-set "ANDROID_HOME=D:\Development\AndroidSDK"
+set "JAVA_HOME=C:\Program Files\Java\jdk-17"
+set "ANDROID_HOME=D:\Development\AndoidSDK"
 
 echo =========================================
 echo Building IDLIX Android APK...

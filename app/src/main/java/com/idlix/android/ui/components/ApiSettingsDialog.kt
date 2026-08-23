@@ -89,6 +89,11 @@ fun ApiSettingsDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     AssistChip(
+                        onClick = { inputUrl = AppConfig.DEFAULT_API_BASE_URL },
+                        label = { Text("VPS Domain", fontSize = 11.sp) }
+                    )
+
+                    AssistChip(
                         onClick = { inputUrl = "http://192.168.1.69:3000" },
                         label = { Text("Wi-Fi PC", fontSize = 11.sp) }
                     )
@@ -96,11 +101,6 @@ fun ApiSettingsDialog(
                     AssistChip(
                         onClick = { inputUrl = "http://10.0.2.2:3000" },
                         label = { Text("Emulator", fontSize = 11.sp) }
-                    )
-
-                    AssistChip(
-                        onClick = { inputUrl = AppConfig.WEBSITE_BASE_URL },
-                        label = { Text("Direct Web", fontSize = 11.sp) }
                     )
                 }
 

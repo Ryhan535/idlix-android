@@ -8,9 +8,9 @@ object AppConfig {
 
     /**
      * Default Base URL jika belum diset oleh user.
-     * Default di-set ke IP Wi-Fi PC saat ini (http://192.168.1.69:3000) atau Emulator (http://10.0.2.2:3000)
+     * Default diset ke domain VPS utama: https://api-movie.sasquadofficial.com
      */
-    const val DEFAULT_API_BASE_URL: String = "http://192.168.1.69:3000"
+    const val DEFAULT_API_BASE_URL: String = "https://api-movie.sasquadofficial.com"
 
     /**
      * Domain Website IDLIX Utama (digunakan untuk fallback/scraping web langsung)
@@ -22,7 +22,11 @@ object AppConfig {
      */
     fun getApiBaseUrl(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val savedUrl = prefs.getString(KEY_API_BASE_URL, DEFAULT_API_BASE_URL) ?: DEFAULT_API_BASE_URL
+        var savedUrl = prefs.getString(KEY_API_BASE_URL, null)
+        if (savedUrl.isNullOrEmpty() || savedUrl == "http://192.168.1.69:3000") {
+            savedUrl = DEFAULT_API_BASE_URL
+            prefs.edit().putString(KEY_API_BASE_URL, DEFAULT_API_BASE_URL).apply()
+        }
         return normalizeUrl(savedUrl)
     }
 
@@ -42,7 +46,11 @@ object AppConfig {
         var url = rawUrl.trim()
         if (url.isEmpty()) return DEFAULT_API_BASE_URL
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            url = "http://$url"
+            url = if (url.startsWith("192.168.") || url.startsWith("10.0.") || url.startsWith("localhost") || url.contains(":")) {
+                "http://$url"
+            } else {
+                "https://$url"
+            }
         }
         while (url.endsWith("/")) {
             url = url.substring(0, url.length - 1)

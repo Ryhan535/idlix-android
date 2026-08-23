@@ -33,6 +33,7 @@ import coil.compose.AsyncImage
 import com.idlix.android.data.api.IdlixApiClient
 import com.idlix.android.data.model.MovieDetail
 import com.idlix.android.data.model.SeriesDetail
+import com.idlix.android.data.model.SubtitleTrack
 import com.idlix.android.data.scraper.IdlixStreamScraper
 import com.idlix.android.ui.components.LoadingView
 import com.idlix.android.ui.player.PlayerActivity
@@ -174,7 +175,7 @@ fun DetailScreen(
                                     val streamRes = scraper.getMovieStream(slug)
                                     isExtractingStream = false
                                     if (!streamRes.streamUrl.isNullOrEmpty()) {
-                                        launchPlayer(context, title, streamRes.streamUrl, streamRes.subtitles.map { it.url })
+                                        launchPlayer(context, title, streamRes.streamUrl, streamRes.subtitles)
                                     } else {
                                         Toast.makeText(context, "Error: ${streamRes.error ?: "Stream unavailable"}", Toast.LENGTH_LONG).show()
                                     }
@@ -298,7 +299,7 @@ fun DetailScreen(
                                             val streamRes = scraper.getEpisodeStream(slug, currentSeason.seasonNumber, episode.episodeNumber)
                                             isExtractingStream = false
                                             if (!streamRes.streamUrl.isNullOrEmpty()) {
-                                                launchPlayer(context, "$title - S${currentSeason.seasonNumber}E${episode.episodeNumber}", streamRes.streamUrl, streamRes.subtitles.map { it.url })
+                                                launchPlayer(context, "$title - S${currentSeason.seasonNumber}E${episode.episodeNumber}", streamRes.streamUrl, streamRes.subtitles)
                                             } else {
                                                 Toast.makeText(context, "Error: ${streamRes.error ?: "Episode stream unavailable"}", Toast.LENGTH_LONG).show()
                                             }
@@ -335,11 +336,11 @@ fun DetailScreen(
     }
 }
 
-private fun launchPlayer(context: Context, title: String, videoUrl: String, subtitles: List<String>) {
+private fun launchPlayer(context: Context, title: String, videoUrl: String, subtitles: List<SubtitleTrack>) {
     val intent = Intent(context, PlayerActivity::class.java).apply {
         putExtra(PlayerActivity.EXTRA_TITLE, title)
         putExtra(PlayerActivity.EXTRA_STREAM_URL, videoUrl)
-        putStringArrayListExtra(PlayerActivity.EXTRA_SUBTITLES, ArrayList(subtitles))
+        putExtra(PlayerActivity.EXTRA_SUBTITLES, ArrayList(subtitles))
     }
     context.startActivity(intent)
 }
