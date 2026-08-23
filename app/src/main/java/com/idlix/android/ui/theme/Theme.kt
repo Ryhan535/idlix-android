@@ -6,12 +6,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
 val RedAccent = Color(0xFFE50914)
-val DarkBackground = Color(0xFF121212)
-val DarkSurface = Color(0xFF1E1E1E)
-val CardBackground = Color(0xFF2A2A2A)
+val DarkBackground = Color(0xFF0F1015)
+val DarkSurface = Color(0xFF16181E)
+val CardBackground = Color(0xFF1A1D24)
+val BorderColor = Color(0xFF242834)
+val AmberStar = Color(0xFFF59E0B)
 val TextPrimary = Color(0xFFFFFFFF)
-val TextSecondary = Color(0xFFB0B0B0)
-val FocusOutline = Color(0xFFFFD700) // TV Focus Gold Highlight
+val TextSecondary = Color(0xFF9CA3AF)
+val FocusOutline = Color(0xFFFF1E27) // Accent Highlight
 
 private val DarkColorScheme = darkColorScheme(
     primary = RedAccent,
@@ -32,3 +34,4 @@ fun IDLIXTheme(
         content = content
     )
 }
+

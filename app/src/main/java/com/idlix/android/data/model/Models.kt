@@ -7,7 +7,9 @@ data class MovieItem(
     val type: String = "movie", // "movie" or "series"
     val year: Int? = null,
     val quality: String? = null,
-    val rating: String? = null
+    val rating: String? = null,
+    val overview: String? = null,
+    val duration: String? = null
 )
 
 data class MovieDetail(

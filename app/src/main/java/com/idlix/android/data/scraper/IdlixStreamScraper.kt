@@ -187,7 +187,8 @@ class IdlixStreamScraper(
                 if (isFinished) return
 
                 val cookieManager = CookieManager.getInstance()
-                val cookies = cookieManager.getCookie(pageUrl) ?: ""
+                cookieManager.flush()
+                var cookies = cookieManager.getCookie(pageUrl) ?: ""
 
                 Thread {
                     try {
@@ -212,6 +213,16 @@ class IdlixStreamScraper(
                         var playInfo = getPlayInfo(apiContentType, uuid, cookies, pageUrl)
                         var gateToken = extractGateToken(playInfo)
                         
+                        // If gateToken is missing on first load, wait for JS cookies to settle & retry once
+                        if (gateToken.isNullOrEmpty()) {
+                            Thread.sleep(1000)
+                            mainHandler.post { cookieManager.flush() }
+                            cookies = cookieManager.getCookie(pageUrl) ?: ""
+                            trackView(type, uuid, cookies, pageUrl)
+                            playInfo = getPlayInfo(apiContentType, uuid, cookies, pageUrl)
+                            gateToken = extractGateToken(playInfo)
+                        }
+
                         if (gateToken.isNullOrEmpty() && type != "movie") {
                             playInfo = getPlayInfo("tv", uuid, cookies, pageUrl)
                             gateToken = extractGateToken(playInfo)
@@ -372,27 +383,25 @@ class IdlixStreamScraper(
             jsonBody.put("contentId", uuid)
 
             val body = jsonBody.toString().toRequestBody("application/json".toMediaType())
-            val req = Request.Builder()
+            val reqBuilder = Request.Builder()
                 .url("$baseUrl/api/views/track")
                 .post(body)
-                .header("Cookie", cookies)
                 .header("Referer", referer)
                 .header("Origin", baseUrl)
-                .build()
+            if (cookies.isNotEmpty()) reqBuilder.header("Cookie", cookies)
 
-            okHttpClient.newCall(req).execute().close()
+            okHttpClient.newCall(reqBuilder.build()).execute().close()
         } catch (_: Exception) {}
     }
 
     private fun getPlayInfo(type: String, uuid: String, cookies: String, referer: String): JSONObject? {
-        val req = Request.Builder()
+        val reqBuilder = Request.Builder()
             .url("$baseUrl/api/watch/play-info/$type/$uuid")
-            .header("Cookie", cookies)
             .header("Referer", referer)
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
-            .build()
+        if (cookies.isNotEmpty()) reqBuilder.header("Cookie", cookies)
 
-        val res = okHttpClient.newCall(req).execute()
+        val res = okHttpClient.newCall(reqBuilder.build()).execute()
         val body = res.body?.string() ?: return null
         return JSONObject(body)
     }
@@ -402,15 +411,14 @@ class IdlixStreamScraper(
         jsonBody.put("gateToken", gateToken)
 
         val body = jsonBody.toString().toRequestBody("application/json".toMediaType())
-        val req = Request.Builder()
+        val reqBuilder = Request.Builder()
             .url("$baseUrl/api/watch/session/claim")
             .post(body)
-            .header("Cookie", cookies)
             .header("Referer", referer)
             .header("Origin", baseUrl)
-            .build()
+        if (cookies.isNotEmpty()) reqBuilder.header("Cookie", cookies)
 
-        val res = okHttpClient.newCall(req).execute()
+        val res = okHttpClient.newCall(reqBuilder.build()).execute()
         val resBody = res.body?.string() ?: return null
         return JSONObject(resBody)
     }

@@ -1,14 +1,17 @@
 package com.idlix.android.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -77,52 +80,94 @@ fun HomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(DarkBackground)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "IDLIX",
-                    color = RedAccent,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Black
-                )
+                // Logo Branding: Red Circle "ID" Badge + Text "IDLIX"
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(RedAccent),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "ID",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
 
+                    Text(
+                        text = "IDLIX",
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+
+                // Right Action Icons (Search, Filter, Settings)
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    var isSearchFocused by remember { mutableStateOf(false) }
+                    // Search Action Button
                     Box(
                         modifier = Modifier
+                            .size(36.dp)
                             .clip(CircleShape)
-                            .background(if (isSearchFocused) FocusOutline else Color.DarkGray)
-                            .onFocusChanged { isSearchFocused = it.isFocused }
-                            .clickable { onSearchClick() }
-                            .focusable()
-                            .padding(8.dp)
+                            .background(Color(0xFF16181E))
+                            .border(1.dp, Color(0xFF242834), CircleShape)
+                            .clickable { onSearchClick() },
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Search,
                             contentDescription = "Search",
-                            tint = if (isSearchFocused) Color.Black else Color.White
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
 
-                    var isSettingsFocused by remember { mutableStateOf(false) }
+                    // Filter Action Button
                     Box(
                         modifier = Modifier
+                            .size(36.dp)
                             .clip(CircleShape)
-                            .background(if (isSettingsFocused) FocusOutline else Color.DarkGray)
-                            .onFocusChanged { isSettingsFocused = it.isFocused }
-                            .clickable { showSettingsDialog = true }
-                            .focusable()
-                            .padding(8.dp)
+                            .background(Color(0xFF16181E))
+                            .border(1.dp, Color(0xFF242834), CircleShape)
+                            .clickable { showSettingsDialog = true },
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Settings",
-                            tint = if (isSettingsFocused) Color.Black else Color.White
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Filter",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    // Profile / Settings Button
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF16181E))
+                            .border(1.dp, Color(0xFF242834), CircleShape)
+                            .clickable { showSettingsDialog = true },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = "Profile",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
@@ -136,7 +181,8 @@ fun HomeScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(paddingValues)
+                    .padding(paddingValues),
+                contentPadding = PaddingValues(bottom = 16.dp)
             ) {
                 val featuredMovie = homepageSections.values.firstOrNull()?.firstOrNull()
                     ?: moviesList.firstOrNull()
@@ -153,7 +199,8 @@ fun HomeScreen(
                             MovieRow(
                                 title = sectionTitle,
                                 movies = items,
-                                onMovieClick = onMovieClick
+                                onMovieClick = onMovieClick,
+                                subtitle = "Rilisan film & series terbaru di IDLIX"
                             )
                         }
                     }
@@ -161,9 +208,10 @@ fun HomeScreen(
                     if (moviesList.isNotEmpty()) {
                         item {
                             MovieRow(
-                                title = "Movies",
+                                title = "Bioskop XXI Terbaru",
                                 movies = moviesList,
-                                onMovieClick = onMovieClick
+                                onMovieClick = onMovieClick,
+                                subtitle = "Rilisan film terbaru yang sedang tayang di bioskop XXI"
                             )
                         }
                     }
@@ -171,9 +219,10 @@ fun HomeScreen(
                     if (seriesList.isNotEmpty()) {
                         item {
                             MovieRow(
-                                title = "TV Series",
+                                title = "Serial TV Terpopuler",
                                 movies = seriesList,
-                                onMovieClick = onMovieClick
+                                onMovieClick = onMovieClick,
+                                subtitle = "Serial drama dan TV show pilihan minggu ini"
                             )
                         }
                     }
