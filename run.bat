@@ -1,6 +1,6 @@
 @echo off
 set "ADB=D:\Development\AndroidSDK\platform-tools\adb.exe"
-set "DEVICE=192.168.1.67:46525"
+set "DEVICE=192.168.1.67:32879"
 
 call build.bat
 

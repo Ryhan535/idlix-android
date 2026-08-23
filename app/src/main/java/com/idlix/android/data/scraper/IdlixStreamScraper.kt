@@ -26,9 +26,13 @@ import kotlin.coroutines.resume
 
 class IdlixStreamScraper(
     private val context: Context,
-    private val baseUrl: String = AppConfig.getNormalizedApiBaseUrl(),
+    var baseUrl: String = AppConfig.getNormalizedApiBaseUrl(),
     private val webSiteBaseUrl: String = AppConfig.WEBSITE_BASE_URL
 ) {
+    fun updateBaseUrl(newUrl: String) {
+        this.baseUrl = AppConfig.normalizeUrl(newUrl)
+    }
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -36,16 +40,81 @@ class IdlixStreamScraper(
         .build()
 
     /**
-     * Extract stream URL for a movie or episode using background WebView + Native OkHttp
+     * Mencoba mengambil stream URL langsung dari endpoint REST API v3 (/api/movie/:slug/stream atau /api/series/:slug/season/:s/episode/:e/stream)
      */
-    suspend fun getMovieStream(slug: String): StreamResult = withContext(Dispatchers.Main) {
-        val pageUrl = "$webSiteBaseUrl/movie/$slug"
-        return@withContext extractStreamChain(pageUrl, "movie", slug)
+    private fun fetchNativeApiStream(vararg relativePaths: String): StreamResult? {
+        val baseUrls = listOf(baseUrl, AppConfig.WEBSITE_BASE_URL).distinct()
+        for (base in baseUrls) {
+            for (path in relativePaths) {
+                try {
+                    val req = Request.Builder()
+                        .url("$base$path")
+                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
+                        .header("Accept", "application/json, text/plain, */*")
+                        .build()
+
+                    val res = okHttpClient.newCall(req).execute()
+                    if (res.isSuccessful) {
+                        val body = res.body?.string()
+                        res.close()
+                        if (!body.isNullOrEmpty()) {
+                            val json = JSONObject(body)
+                            val data = if (json.has("data")) json.getJSONObject("data") else json
+                            val streamUrl = data.optString("streamUrl", data.optString("url", data.optString("stream_url", "")))
+                            if (streamUrl.isNotEmpty() && streamUrl.startsWith("http")) {
+                                val subsList = mutableListOf<SubtitleTrack>()
+                                val subsArr = data.optJSONArray("subtitles") ?: data.optJSONArray("captions")
+                                if (subsArr != null) {
+                                    for (i in 0 until subsArr.length()) {
+                                        val s = subsArr.getJSONObject(i)
+                                        val subUrl = s.optString("url", s.optString("file", ""))
+                                        if (subUrl.isNotEmpty()) {
+                                            subsList.add(
+                                                SubtitleTrack(
+                                                    lang = s.optString("lang", s.optString("label", "ID")),
+                                                    label = s.optString("label", s.optString("lang", "Indonesia")),
+                                                    url = subUrl
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                                return StreamResult(streamUrl = streamUrl, subtitles = subsList)
+                            }
+                        }
+                    } else {
+                        res.close()
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        return null
     }
 
-    suspend fun getEpisodeStream(slug: String, season: Int, episode: Int): StreamResult = withContext(Dispatchers.Main) {
-        val pageUrl = "$webSiteBaseUrl/series/$slug/season/$season/episode/$episode"
-        return@withContext extractStreamChain(pageUrl, "episode", slug, season, episode)
+    /**
+     * Extract stream URL for a movie or episode using native REST API v3 or background WebView fallback
+     */
+    suspend fun getMovieStream(slug: String): StreamResult = withContext(Dispatchers.IO) {
+        val nativeStream = fetchNativeApiStream("/api/movie/$slug/stream", "/api/movies/$slug/stream")
+        if (nativeStream != null) return@withContext nativeStream
+
+        withContext(Dispatchers.Main) {
+            val pageUrl = "$webSiteBaseUrl/movie/$slug"
+            extractStreamChain(pageUrl, "movie", slug)
+        }
+    }
+
+    suspend fun getEpisodeStream(slug: String, season: Int, episode: Int): StreamResult = withContext(Dispatchers.IO) {
+        val nativeStream = fetchNativeApiStream(
+            "/api/series/$slug/season/$season/episode/$episode/stream",
+            "/api/serieses/$slug/season/$season/episode/$episode/stream"
+        )
+        if (nativeStream != null) return@withContext nativeStream
+
+        withContext(Dispatchers.Main) {
+            val pageUrl = "$webSiteBaseUrl/series/$slug/season/$season/episode/$episode"
+            extractStreamChain(pageUrl, "episode", slug, season, episode)
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -61,178 +130,185 @@ class IdlixStreamScraper(
         webView.settings.domStorageEnabled = true
         webView.settings.userAgentString = "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
-        CookieManager.getInstance().setAcceptCookie(true)
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
-
-        var hasFinishedCF = false
-
-        webView.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView?, url: String?) {
-                super.onPageFinished(view, url)
-                if (!hasFinishedCF) {
-                    hasFinishedCF = true
-                    // Give JS 2 seconds to ensure Cloudflare cookies are saved
-                    mainHandler.postDelayed({
-                        val cookies = CookieManager.getInstance().getCookie(url) ?: ""
-                        executeApiChainInBackground(cookies, type, slug, season, episode, pageUrl) { result ->
-                            mainHandler.post {
-                                webView.destroy()
-                                if (continuation.isActive) {
-                                    continuation.resume(result)
-                                }
-                            }
-                        }
-                    }, 2000)
-                }
-            }
-        }
-
-        webView.loadUrl(pageUrl)
-
-        continuation.invokeOnCancellation {
+        var isFinished = false
+        val cleanup = {
             mainHandler.post {
                 webView.stopLoading()
                 webView.destroy()
             }
         }
-    }
 
-    private fun executeApiChainInBackground(
-        cookies: String,
-        type: String,
-        slug: String,
-        season: Int,
-        episode: Int,
-        refererUrl: String,
-        onComplete: (StreamResult) -> Unit
-    ) {
-        Thread {
-            try {
-                // Step 1: Resolve UUID
-                val uuid = if (type == "movie") {
-                    resolveMovieUuid(slug, cookies, refererUrl)
-                } else {
-                    resolveEpisodeUuid(slug, season, episode, cookies, refererUrl)
-                }
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                if (isFinished) return
 
-                if (uuid == null) {
-                    onComplete(StreamResult(null, error = "Failed to resolve content UUID"))
-                    return@Thread
-                }
+                val cookieManager = CookieManager.getInstance()
+                val cookies = cookieManager.getCookie(pageUrl) ?: ""
 
-                // Step 2: Track View (Optional)
-                trackView(type, uuid, cookies, refererUrl)
+                Thread {
+                    try {
+                        val uuid = if (type == "movie") {
+                            resolveMovieUuid(slug, cookies, pageUrl)
+                        } else {
+                            resolveEpisodeUuid(slug, season, episode, cookies, pageUrl)
+                        }
 
-                // Step 3: Get Play Info
-                val playInfoType = if (type == "movie") "movie" else "episode"
-                val playInfo = getPlayInfo(playInfoType, uuid, cookies, refererUrl)
-                if (playInfo == null) {
-                    onComplete(StreamResult(null, error = "Failed to fetch play-info"))
-                    return@Thread
-                }
+                        if (uuid.isNullOrEmpty()) {
+                            if (!isFinished) {
+                                isFinished = true
+                                cleanup()
+                                continuation.resume(StreamResult(null, error = "Failed to resolve content ID"))
+                            }
+                            return@Thread
+                        }
 
-                val gateToken = playInfo.optString("gateToken", "")
-                val unlockAt = playInfo.optLong("unlockAt", 0L)
-                val serverNow = playInfo.optLong("serverNow", 0L)
+                        trackView(type, uuid, cookies, pageUrl)
+                        val playInfo = getPlayInfo(type, uuid, cookies, pageUrl)
+                        val gateToken = playInfo?.optString("gateToken", null)
 
-                if (gateToken.isEmpty()) {
-                    onComplete(StreamResult(null, error = "Invalid gateToken received"))
-                    return@Thread
-                }
+                        if (gateToken.isNullOrEmpty()) {
+                            if (!isFinished) {
+                                isFinished = true
+                                cleanup()
+                                continuation.resume(StreamResult(null, error = "Failed to obtain play token"))
+                            }
+                            return@Thread
+                        }
 
-                // Step 4: Mandatory wait for unlockAt timer (approx 15 seconds)
-                val waitMs = (unlockAt - serverNow).coerceIn(0L, 20000L)
-                if (waitMs > 0) {
-                    Thread.sleep(waitMs + 500)
-                }
+                        val claimResult = claimSession(gateToken, cookies, pageUrl)
+                        val claim = claimResult?.optString("claim", null)
+                        val redeemUrl = claimResult?.optString("redeemUrl", null)
 
-                // Step 5: Claim Session
-                val claimResult = claimSession(gateToken, cookies, refererUrl)
-                if (claimResult == null) {
-                    onComplete(StreamResult(null, error = "Failed to claim session token"))
-                    return@Thread
-                }
+                        if (claim.isNullOrEmpty() || redeemUrl.isNullOrEmpty()) {
+                            if (!isFinished) {
+                                isFinished = true
+                                cleanup()
+                                continuation.resume(StreamResult(null, error = "Failed to claim stream session"))
+                            }
+                            return@Thread
+                        }
 
-                val claim = claimResult.optString("claim", "")
-                val redeemUrl = claimResult.optString("redeemUrl", "")
+                        val playData = redeemClaim(redeemUrl, claim)
+                        val streamUrl = if (playData != null && playData.has("url")) playData.optString("url") else null
 
-                if (claim.isEmpty() || redeemUrl.isEmpty()) {
-                    onComplete(StreamResult(null, error = "Missing claim token or redeem URL"))
-                    return@Thread
-                }
+                        if (!streamUrl.isNullOrEmpty()) {
+                            val subsList = mutableListOf<SubtitleTrack>()
+                            val subsArr = playData?.optJSONArray("subtitles")
+                            if (subsArr != null) {
+                                for (i in 0 until subsArr.length()) {
+                                    val s = subsArr.getJSONObject(i)
+                                    val subUrl = if (s.has("url")) s.optString("url") else ""
+                                    if (subUrl.isNotEmpty()) {
+                                        subsList.add(
+                                            SubtitleTrack(
+                                                lang = if (s.has("lang")) s.optString("lang") else "ID",
+                                                label = if (s.has("label")) s.optString("label") else "Indonesia",
+                                                url = subUrl
+                                            )
+                                        )
+                                    }
+                                }
+                            }
 
-                // Step 6: Redeem Claim at majorplay.net
-                val playData = redeemClaim(redeemUrl, claim)
-                if (playData == null) {
-                    onComplete(StreamResult(null, error = "Failed to redeem stream link from majorplay.net"))
-                    return@Thread
-                }
-
-                val streamUrl = playData.optString("url", null)
-                val subsArray = playData.optJSONArray("subtitles")
-                val subtitles = mutableListOf<SubtitleTrack>()
-
-                if (subsArray != null) {
-                    for (i in 0 until subsArray.length()) {
-                        val sub = subsArray.getJSONObject(i)
-                        subtitles.add(
-                            SubtitleTrack(
-                                lang = sub.optString("lang", "en"),
-                                label = sub.optString("label", "Subtitle"),
-                                url = sub.optString("path", "")
-                            )
-                        )
+                            if (!isFinished) {
+                                isFinished = true
+                                cleanup()
+                                continuation.resume(
+                                    StreamResult(
+                                        streamUrl = streamUrl,
+                                        subtitles = subsList,
+                                        videoId = if (playData?.has("videoId") == true) playData.optString("videoId") else null,
+                                        title = if (claimResult?.has("title") == true) claimResult.optString("title") else null
+                                    )
+                                )
+                            }
+                        } else {
+                            if (!isFinished) {
+                                isFinished = true
+                                cleanup()
+                                continuation.resume(StreamResult(null, error = "Stream URL extraction returned empty"))
+                            }
+                        }
+                    } catch (e: Exception) {
+                        if (!isFinished) {
+                            isFinished = true
+                            cleanup()
+                            continuation.resume(StreamResult(null, error = e.localizedMessage ?: "Scraping error"))
+                        }
                     }
-                }
-
-                onComplete(
-                    StreamResult(
-                        streamUrl = streamUrl,
-                        subtitles = subtitles,
-                        videoId = playData.optString("videoId", null),
-                        title = claimResult.optString("title", null)
-                    )
-                )
-
-            } catch (e: Exception) {
-                e.printStackTrace()
-                onComplete(StreamResult(null, error = e.localizedMessage ?: "Scraping error"))
+                }.start()
             }
-        }.start()
+        }
+
+        webView.loadUrl(pageUrl)
     }
 
     private fun resolveMovieUuid(slug: String, cookies: String, referer: String): String? {
-        val req = Request.Builder()
-            .url("$baseUrl/api/movies/$slug")
-            .header("Cookie", cookies)
-            .header("Referer", referer)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
-            .build()
+        val paths = listOf("/api/movie/$slug", "/api/movies/$slug")
+        val baseUrls = listOf(baseUrl, AppConfig.WEBSITE_BASE_URL).distinct()
+        for (base in baseUrls) {
+            for (path in paths) {
+                try {
+                    val req = Request.Builder()
+                        .url("$base$path")
+                        .header("Cookie", cookies)
+                        .header("Referer", referer)
+                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
+                        .build()
 
-        val res = okHttpClient.newCall(req).execute()
-        val body = res.body?.string() ?: return null
-        val json = JSONObject(body)
-        return json.optString("id", if (json.has("data")) json.getJSONObject("data").optString("id") else null)
+                    val res = okHttpClient.newCall(req).execute()
+                    if (res.isSuccessful) {
+                        val body = res.body?.string()
+                        res.close()
+                        if (!body.isNullOrEmpty()) {
+                            val json = JSONObject(body)
+                            val id = if (json.has("id")) json.optString("id") else (json.optJSONObject("data")?.optString("id") ?: "")
+                            if (id.isNotEmpty()) return id
+                        }
+                    } else {
+                        res.close()
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        return null
     }
 
     private fun resolveEpisodeUuid(slug: String, season: Int, episode: Int, cookies: String, referer: String): String? {
-        val req = Request.Builder()
-            .url("$baseUrl/api/serieses/$slug/season/$season")
-            .header("Cookie", cookies)
-            .header("Referer", referer)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
-            .build()
+        val paths = listOf("/api/series/$slug/season/$season", "/api/serieses/$slug/season/$season")
+        val baseUrls = listOf(baseUrl, AppConfig.WEBSITE_BASE_URL).distinct()
+        for (base in baseUrls) {
+            for (path in paths) {
+                try {
+                    val req = Request.Builder()
+                        .url("$base$path")
+                        .header("Cookie", cookies)
+                        .header("Referer", referer)
+                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
+                        .build()
 
-        val res = okHttpClient.newCall(req).execute()
-        val body = res.body?.string() ?: return null
-        val json = JSONObject(body)
-        val seasonObj = json.optJSONObject("season") ?: return null
-        val eps = seasonObj.optJSONArray("episodes") ?: return null
-
-        for (i in 0 until eps.length()) {
-            val ep = eps.getJSONObject(i)
-            if (ep.optInt("episodeNumber") == episode) {
-                return ep.optString("id", null)
+                    val res = okHttpClient.newCall(req).execute()
+                    if (res.isSuccessful) {
+                        val body = res.body?.string()
+                        res.close()
+                        if (!body.isNullOrEmpty()) {
+                            val json = JSONObject(body)
+                            val seasonObj = if (json.has("season")) json.optJSONObject("season") else json.optJSONObject("data")?.optJSONObject("season")
+                            val eps = seasonObj?.optJSONArray("episodes")
+                            if (eps != null) {
+                                for (i in 0 until eps.length()) {
+                                    val ep = eps.getJSONObject(i)
+                                    if (ep.optInt("episodeNumber") == episode) {
+                                        val epId = ep.optString("id", "")
+                                        if (epId.isNotEmpty()) return epId
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        res.close()
+                    }
+                } catch (_: Exception) {}
             }
         }
         return null

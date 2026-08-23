@@ -12,6 +12,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.idlix.android.config.AppConfig
 import com.idlix.android.data.api.IdlixApiClient
 import com.idlix.android.data.scraper.IdlixStreamScraper
 import com.idlix.android.ui.screens.DetailScreen
@@ -32,8 +33,9 @@ class MainActivity : ComponentActivity() {
                     color = DarkBackground
                 ) {
                     val navController = rememberNavController()
-                    val apiClient = remember { IdlixApiClient() }
-                    val scraper = remember { IdlixStreamScraper(this@MainActivity) }
+                    val savedApiUrl = remember { AppConfig.getApiBaseUrl(this@MainActivity) }
+                    val apiClient = remember { IdlixApiClient(baseUrl = savedApiUrl) }
+                    val scraper = remember { IdlixStreamScraper(context = this@MainActivity, baseUrl = savedApiUrl) }
 
                     NavHost(
                         navController = navController,

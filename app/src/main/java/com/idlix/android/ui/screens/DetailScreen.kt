@@ -64,10 +64,17 @@ fun DetailScreen(
 
     LaunchedEffect(slug, type) {
         isLoading = true
-        if (type == "series") {
+        val normalizedType = type.lowercase().trim()
+        if (normalizedType == "series" || normalizedType == "tv" || normalizedType == "tv_series" || normalizedType == "show") {
             seriesDetail = apiClient.fetchSeriesDetail(slug)
+            if (seriesDetail == null) {
+                movieDetail = apiClient.fetchMovieDetail(slug)
+            }
         } else {
             movieDetail = apiClient.fetchMovieDetail(slug)
+            if (movieDetail == null) {
+                seriesDetail = apiClient.fetchSeriesDetail(slug)
+            }
         }
         isLoading = false
     }

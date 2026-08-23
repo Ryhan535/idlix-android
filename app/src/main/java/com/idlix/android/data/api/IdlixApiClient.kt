@@ -15,8 +15,12 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 class IdlixApiClient(
-    val baseUrl: String = AppConfig.getNormalizedApiBaseUrl()
+    var baseUrl: String = AppConfig.getNormalizedApiBaseUrl()
 ) {
+    fun updateBaseUrl(newUrl: String) {
+        this.baseUrl = AppConfig.normalizeUrl(newUrl)
+    }
+
     val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
@@ -32,12 +36,56 @@ class IdlixApiClient(
             .build()
     }
 
+    /**
+     * Mencoba mengeksekusi request ke beberapa rute alternatif (sesuai spesifikasi IDLIX API v3 Postman Collection).
+     * Jika gagal (404/error), secara otomatis fallback ke website utama IDLIX.
+     */
+    private fun tryExecute(vararg relativePaths: String): String? {
+        val baseUrls = listOf(baseUrl, AppConfig.WEBSITE_BASE_URL).distinct()
+        for (base in baseUrls) {
+            for (path in relativePaths) {
+                try {
+                    val fullUrl = "$base$path"
+                    val req = buildRequest(fullUrl)
+                    val res = client.newCall(req).execute()
+                    if (res.isSuccessful) {
+                        val body = res.body?.string()
+                        res.close()
+                        if (!body.isNullOrEmpty()) {
+                            return body
+                        }
+                    } else {
+                        res.close()
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        return null
+    }
+
+    /**
+     * Helper cerdas untuk menentukan apakah sebuah item JSON adalah TV Series atau Movie
+     */
+    private fun isSeriesType(item: JSONObject): Boolean {
+        val rawType = item.optString("type", item.optString("media_type", "")).lowercase().trim()
+        if (rawType == "series" || rawType == "tv" || rawType == "tv_series" || rawType == "tvshow" || rawType == "show" || rawType == "season") {
+            return true
+        }
+        if (item.has("episodes") || item.has("seasons") || item.has("totalSeasons") || item.has("season_number")) {
+            return true
+        }
+        val slug = item.optString("slug", "").lowercase()
+        if (slug.contains("season-") || slug.contains("-season")) {
+            return true
+        }
+        return false
+    }
+
     suspend fun fetchHomepageSections(): Map<String, List<MovieItem>> = withContext(Dispatchers.IO) {
         val result = mutableMapOf<String, List<MovieItem>>()
         try {
-            val req = buildRequest("$baseUrl/api/homepage")
-            val res = client.newCall(req).execute()
-            val body = res.body?.string() ?: return@withContext result
+            // Mencoba rute API v3: /api/home/sections, /api/home, /api/featured, /api/homepage
+            val body = tryExecute("/api/home/sections", "/api/home", "/api/featured", "/api/homepage") ?: return@withContext result
             val json = JSONObject(body)
 
             val parseSection = { sectionName: String, array: JSONArray? ->
@@ -48,7 +96,7 @@ class IdlixApiClient(
                         val title = item.optString("title", item.optString("name", ""))
                         val slug = item.optString("slug", "")
                         val poster = item.optString("poster", item.optString("posterPath", ""))
-                        val type = if (item.has("episodes") || item.optString("type") == "tv_series") "series" else "movie"
+                        val type = if (isSeriesType(item)) "series" else "movie"
                         val year = item.optInt("year", 0)
 
                         if (title.isNotEmpty() && slug.isNotEmpty()) {
@@ -69,6 +117,17 @@ class IdlixApiClient(
                     val items = sec.optJSONArray("data")
                     parseSection(secTitle, items)
                 }
+            } else if (json.has("sections")) {
+                val sections = json.getJSONObject("sections")
+                val keys = sections.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val arr = sections.optJSONArray(key)
+                    parseSection(key.replaceFirstChar { it.uppercase() }, arr)
+                }
+            } else if (json.has("data")) {
+                val data = json.optJSONArray("data")
+                parseSection("Popular Movies & Series", data)
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -79,17 +138,20 @@ class IdlixApiClient(
     suspend fun fetchMovies(page: Int = 1): List<MovieItem> = withContext(Dispatchers.IO) {
         val list = mutableListOf<MovieItem>()
         try {
-            val req = buildRequest("$baseUrl/api/movies?page=$page&limit=36&sort=createdAt")
-            val res = client.newCall(req).execute()
-            val body = res.body?.string() ?: return@withContext list
+            val body = tryExecute(
+                "/api/movie?page=$page&limit=36&sort=createdAt",
+                "/api/movie/trending",
+                "/api/movies?page=$page&limit=36&sort=createdAt"
+            ) ?: return@withContext list
+
             val json = JSONObject(body)
-            val data = json.optJSONArray("data") ?: return@withContext list
+            val data = json.optJSONArray("data") ?: (if (json.has("movies")) json.optJSONArray("movies") else null) ?: (if (json.has("results")) json.optJSONArray("results") else null) ?: return@withContext list
 
             for (i in 0 until data.length()) {
                 val item = data.getJSONObject(i)
-                val title = item.optString("title", "")
+                val title = item.optString("title", item.optString("name", ""))
                 val slug = item.optString("slug", "")
-                val poster = item.optString("poster", "")
+                val poster = item.optString("poster", item.optString("posterPath", ""))
                 val year = item.optInt("year", 0)
 
                 if (title.isNotEmpty() && slug.isNotEmpty()) {
@@ -105,17 +167,20 @@ class IdlixApiClient(
     suspend fun fetchSeries(page: Int = 1): List<MovieItem> = withContext(Dispatchers.IO) {
         val list = mutableListOf<MovieItem>()
         try {
-            val req = buildRequest("$baseUrl/api/serieses?page=$page&limit=36&sort=createdAt")
-            val res = client.newCall(req).execute()
-            val body = res.body?.string() ?: return@withContext list
+            val body = tryExecute(
+                "/api/series?page=$page&limit=36&sort=createdAt",
+                "/api/series/trending",
+                "/api/serieses?page=$page&limit=36&sort=createdAt"
+            ) ?: return@withContext list
+
             val json = JSONObject(body)
-            val data = json.optJSONArray("data") ?: return@withContext list
+            val data = json.optJSONArray("data") ?: (if (json.has("series")) json.optJSONArray("series") else null) ?: (if (json.has("results")) json.optJSONArray("results") else null) ?: return@withContext list
 
             for (i in 0 until data.length()) {
                 val item = data.getJSONObject(i)
                 val title = item.optString("title", item.optString("name", ""))
                 val slug = item.optString("slug", "")
-                val poster = item.optString("poster", "")
+                val poster = item.optString("poster", item.optString("posterPath", ""))
                 val year = item.optInt("year", 0)
 
                 if (title.isNotEmpty() && slug.isNotEmpty()) {
@@ -131,18 +196,16 @@ class IdlixApiClient(
     suspend fun search(query: String): List<MovieItem> = withContext(Dispatchers.IO) {
         val list = mutableListOf<MovieItem>()
         try {
-            val req = buildRequest("$baseUrl/api/search?q=${query.trim()}")
-            val res = client.newCall(req).execute()
-            val body = res.body?.string() ?: return@withContext list
+            val body = tryExecute("/api/search?q=${query.trim()}") ?: return@withContext list
             val json = JSONObject(body)
-            val data = json.optJSONArray("data") ?: return@withContext list
+            val data = json.optJSONArray("data") ?: (if (json.has("results")) json.optJSONArray("results") else null) ?: return@withContext list
 
             for (i in 0 until data.length()) {
                 val item = data.getJSONObject(i)
                 val title = item.optString("title", item.optString("name", ""))
                 val slug = item.optString("slug", "")
-                val poster = item.optString("poster", "")
-                val type = if (item.optString("type") == "tv_series") "series" else "movie"
+                val poster = item.optString("poster", item.optString("posterPath", ""))
+                val type = if (isSeriesType(item)) "series" else "movie"
 
                 if (title.isNotEmpty() && slug.isNotEmpty()) {
                     list.add(MovieItem(title, slug, fixImageUrl(poster), type))
@@ -156,17 +219,21 @@ class IdlixApiClient(
 
     suspend fun fetchMovieDetail(slug: String): MovieDetail? = withContext(Dispatchers.IO) {
         try {
-            val req = buildRequest("$baseUrl/api/movies/$slug")
-            val res = client.newCall(req).execute()
-            val body = res.body?.string() ?: return@withContext null
+            val body = tryExecute(
+                "/api/movie/$slug",
+                "/api/movies/$slug"
+            ) ?: return@withContext null
+
             val json = JSONObject(body)
             val data = if (json.has("data")) json.getJSONObject("data") else json
 
             val title = data.optString("title", "")
+            if (title.isEmpty()) return@withContext null
+
             val year = data.optInt("year", 0)
             val overview = data.optString("overview", "")
-            val poster = data.optString("poster", "")
-            val backdrop = data.optString("backdrop", "")
+            val poster = data.optString("poster", data.optString("posterPath", ""))
+            val backdrop = data.optString("backdrop", data.optString("backdropPath", ""))
             val watchUrl = data.optString("watchUrl", "$baseUrl/movie/$slug?play=1")
             
             val genresArr = data.optJSONArray("genres")
@@ -179,18 +246,22 @@ class IdlixApiClient(
                 }
             }
 
+            val runtimeStr = if (data.has("runtime")) data.optString("runtime") else null
+            val countryStr = if (data.has("country")) data.optString("country") else null
+            val ratingStr = if (data.has("rating")) data.optString("rating") else null
+
             return@withContext MovieDetail(
                 title = title,
                 slug = slug,
                 year = if (year > 0) year else null,
                 type = "movie",
-                runtime = data.optString("runtime", null),
+                runtime = runtimeStr,
                 overview = overview,
                 poster = fixImageUrl(poster),
                 backdrop = fixImageUrl(backdrop),
                 genres = genres,
-                country = data.optString("country", null),
-                rating = data.optString("rating", null),
+                country = countryStr,
+                rating = ratingStr,
                 watchUrl = watchUrl
             )
         } catch (e: Exception) {
@@ -201,17 +272,21 @@ class IdlixApiClient(
 
     suspend fun fetchSeriesDetail(slug: String): SeriesDetail? = withContext(Dispatchers.IO) {
         try {
-            val req = buildRequest("$baseUrl/api/serieses/$slug")
-            val res = client.newCall(req).execute()
-            val body = res.body?.string() ?: return@withContext null
+            val body = tryExecute(
+                "/api/series/$slug",
+                "/api/serieses/$slug"
+            ) ?: return@withContext null
+
             val json = JSONObject(body)
             val data = if (json.has("data")) json.getJSONObject("data") else json
 
-            val title = data.optString("title", "")
+            val title = data.optString("title", data.optString("name", ""))
+            if (title.isEmpty()) return@withContext null
+
             val year = data.optInt("year", 0)
             val overview = data.optString("overview", "")
-            val poster = data.optString("poster", "")
-            val backdrop = data.optString("backdrop", "")
+            val poster = data.optString("poster", data.optString("posterPath", ""))
+            val backdrop = data.optString("backdrop", data.optString("backdropPath", ""))
 
             val seasonsArr = data.optJSONArray("seasons")
             val seasonsList = mutableListOf<SeasonData>()
@@ -231,7 +306,7 @@ class IdlixApiClient(
                                     episodeNumber = ep.optInt("episodeNumber", j + 1),
                                     title = ep.optString("title", "Episode ${j + 1}"),
                                     overview = ep.optString("overview", ""),
-                                    stillPath = fixImageUrl(ep.optString("stillPath", ""))
+                                    stillPath = fixImageUrl(ep.optString("stillPath", ep.optString("still_path", "")))
                                 )
                             )
                         }
