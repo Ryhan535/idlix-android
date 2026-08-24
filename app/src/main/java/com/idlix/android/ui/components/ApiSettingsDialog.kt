@@ -90,7 +90,7 @@ fun ApiSettingsDialog(
                 ) {
                     AssistChip(
                         onClick = { inputUrl = AppConfig.DEFAULT_API_BASE_URL },
-                        label = { Text("VPS Domain", fontSize = 11.sp) }
+                        label = { Text("Web Default", fontSize = 11.sp) }
                     )
 
                     AssistChip(

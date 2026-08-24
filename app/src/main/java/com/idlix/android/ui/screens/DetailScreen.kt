@@ -172,10 +172,7 @@ fun DetailScreen(
                                 isExtractingStream = true
                                 extractionProgressText = "Connecting to stream server..."
                                 coroutineScope.launch {
-                                    var streamRes = apiClient.fetchMovieStream(slug)
-                                    if (streamRes.streamUrl.isNullOrEmpty()) {
-                                        streamRes = scraper.getMovieStream(slug)
-                                    }
+                                    val streamRes = scraper.getMovieStream(slug)
                                     isExtractingStream = false
                                     if (!streamRes.streamUrl.isNullOrEmpty()) {
                                         launchPlayer(context, title, streamRes.streamUrl, streamRes.subtitles)
@@ -282,27 +279,27 @@ fun DetailScreen(
                         items(currentSeason.episodes.size) { epIndex ->
                             val episode = currentSeason.episodes[epIndex]
                             var isEpFocused by remember { mutableStateOf(false) }
+                            val epThumbnailUrl = episode.stillPath?.takeIf { it.isNotEmpty() }
+                                ?: seriesDetail?.backdrop?.takeIf { it.isNotEmpty() }
+                                ?: seriesDetail?.poster
 
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(CardBackground)
+                                    .padding(horizontal = 16.dp, vertical = 5.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (isEpFocused) CardBackground.copy(alpha = 0.9f) else CardBackground)
                                     .onFocusChanged { isEpFocused = it.isFocused }
                                     .border(
                                         width = if (isEpFocused) 2.dp else 0.dp,
                                         color = if (isEpFocused) FocusOutline else Color.Transparent,
-                                        shape = RoundedCornerShape(8.dp)
+                                        shape = RoundedCornerShape(10.dp)
                                     )
                                     .clickable {
                                         isExtractingStream = true
                                         extractionProgressText = "Extracting Episode ${episode.episodeNumber}..."
                                         coroutineScope.launch {
-                                            var streamRes = apiClient.fetchEpisodeStream(slug, currentSeason.seasonNumber, episode.episodeNumber)
-                                            if (streamRes.streamUrl.isNullOrEmpty()) {
-                                                streamRes = scraper.getEpisodeStream(slug, currentSeason.seasonNumber, episode.episodeNumber)
-                                            }
+                                            val streamRes = scraper.getEpisodeStream(slug, currentSeason.seasonNumber, episode.episodeNumber)
                                             isExtractingStream = false
                                             if (!streamRes.streamUrl.isNullOrEmpty()) {
                                                 launchPlayer(context, "$title - S${currentSeason.seasonNumber}E${episode.episodeNumber}", streamRes.streamUrl, streamRes.subtitles)
@@ -312,24 +309,60 @@ fun DetailScreen(
                                         }
                                     }
                                     .focusable()
-                                    .padding(12.dp),
+                                    .padding(10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(imageVector = Icons.Default.PlayArrow, contentDescription = "Play", tint = RedAccent)
+                                Box(
+                                    modifier = Modifier
+                                        .width(120.dp)
+                                        .height(68.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color.Black.copy(alpha = 0.4f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (!epThumbnailUrl.isNullOrEmpty()) {
+                                        AsyncImage(
+                                            model = epThumbnailUrl,
+                                            contentDescription = "Episode ${episode.episodeNumber} Thumbnail",
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Black.copy(alpha = 0.25f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayArrow,
+                                            contentDescription = "Play",
+                                            tint = if (isEpFocused) RedAccent else Color.White,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                }
+
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Column {
+
+                                Column(
+                                    modifier = Modifier.weight(1f)
+                                ) {
                                     Text(
                                         text = "Episode ${episode.episodeNumber}${if (!episode.title.isNullOrEmpty()) ": ${episode.title}" else ""}",
                                         color = TextPrimary,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp
+                                        fontSize = 14.sp,
+                                        maxLines = 1
                                     )
                                     if (!episode.overview.isNullOrEmpty()) {
+                                        Spacer(modifier = Modifier.height(4.dp))
                                         Text(
                                             text = episode.overview,
                                             color = TextSecondary,
                                             fontSize = 12.sp,
-                                            maxLines = 2
+                                            maxLines = 2,
+                                            lineHeight = 16.sp
                                         )
                                     }
                                 }

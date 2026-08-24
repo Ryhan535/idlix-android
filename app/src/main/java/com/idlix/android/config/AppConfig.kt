@@ -7,15 +7,14 @@ object AppConfig {
     private const val KEY_API_BASE_URL = "key_api_base_url"
 
     /**
-     * Default Base URL jika belum diset oleh user.
-     * Default diset ke domain VPS utama: https://api-movie.sasquadofficial.com
-     */
-    const val DEFAULT_API_BASE_URL: String = "https://api-movie.sasquadofficial.com"
-
-    /**
      * Domain Website IDLIX Utama (digunakan untuk fallback/scraping web langsung)
      */
     const val WEBSITE_BASE_URL: String = "https://z2.idlixku.com"
+
+    /**
+     * Default Base URL jika belum diset oleh user (diset ke website publik agar URL API privat tidak tersimpan di APK)
+     */
+    val DEFAULT_API_BASE_URL: String = WEBSITE_BASE_URL
 
     /**
      * Mengambil Base URL API dari SharedPreferences atau default.
@@ -23,7 +22,7 @@ object AppConfig {
     fun getApiBaseUrl(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         var savedUrl = prefs.getString(KEY_API_BASE_URL, null)
-        if (savedUrl.isNullOrEmpty() || savedUrl == "http://192.168.1.69:3000") {
+        if (savedUrl.isNullOrEmpty() || savedUrl == "http://192.168.1.69:3000" || savedUrl.contains("sasquadofficial.com")) {
             savedUrl = DEFAULT_API_BASE_URL
             prefs.edit().putString(KEY_API_BASE_URL, DEFAULT_API_BASE_URL).apply()
         }

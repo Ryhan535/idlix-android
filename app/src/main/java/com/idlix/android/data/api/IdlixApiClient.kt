@@ -24,7 +24,7 @@ class IdlixApiClient(
     }
 
     val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
@@ -329,20 +329,80 @@ class IdlixApiClient(
                     val sNum = sObj.optInt("seasonNumber", i + 1)
                     val epsArr = sObj.optJSONArray("episodes")
                     val epList = mutableListOf<EpisodeItem>()
+
                     if (epsArr != null) {
                         for (j in 0 until epsArr.length()) {
                             val ep = epsArr.getJSONObject(j)
+                            val stillUrl = ep.optString("stillPath",
+                                ep.optString("still_path",
+                                    ep.optString("still",
+                                        ep.optString("thumbnail",
+                                            ep.optString("thumb",
+                                                ep.optString("image",
+                                                    ep.optString("poster",
+                                                        ep.optString("backdrop", "")
+                                                    )
+                                                )
+                                            )
+                                        )
+                                    )
+                                )
+                            )
                             epList.add(
                                 EpisodeItem(
-                                    id = ep.optString("id", ""),
-                                    episodeNumber = ep.optInt("episodeNumber", j + 1),
-                                    title = ep.optString("title", "Episode ${j + 1}"),
+                                    id = ep.optString("id", ep.optString("_id", "")),
+                                    episodeNumber = ep.optInt("episodeNumber", ep.optInt("episode", j + 1)),
+                                    title = ep.optString("title", ep.optString("name", "Episode ${j + 1}")),
                                     overview = ep.optString("overview", ""),
-                                    stillPath = fixImageUrl(ep.optString("stillPath", ep.optString("still_path", "")))
+                                    stillPath = fixImageUrl(stillUrl)
                                 )
                             )
                         }
                     }
+
+                    if (epList.isEmpty()) {
+                        try {
+                            val sBody = tryExecute("/api/series/$slug/season/$sNum")
+                            if (!sBody.isNullOrEmpty()) {
+                                val sJson = JSONObject(sBody)
+                                var sEps: JSONArray? = sJson.optJSONArray("data")
+                                    ?: sJson.optJSONObject("data")?.optJSONArray("episodes")
+                                    ?: sJson.optJSONArray("episodes")
+                                    ?: sJson.optJSONObject("season")?.optJSONArray("episodes")
+
+                                if (sEps != null) {
+                                    for (j in 0 until sEps.length()) {
+                                        val ep = sEps.getJSONObject(j)
+                                        val stillUrl = ep.optString("stillPath",
+                                            ep.optString("still_path",
+                                                ep.optString("still",
+                                                    ep.optString("thumbnail",
+                                                        ep.optString("thumb",
+                                                            ep.optString("image",
+                                                                ep.optString("poster",
+                                                                    ep.optString("backdrop", "")
+                                                                )
+                                                            )
+                                                        )
+                                                    )
+                                                )
+                                            )
+                                        )
+                                        epList.add(
+                                            EpisodeItem(
+                                                id = ep.optString("id", ep.optString("_id", "")),
+                                                episodeNumber = ep.optInt("episodeNumber", ep.optInt("episode", j + 1)),
+                                                title = ep.optString("title", ep.optString("name", "Episode ${j + 1}")),
+                                                overview = ep.optString("overview", ""),
+                                                stillPath = fixImageUrl(stillUrl)
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {}
+                    }
+
                     seasonsList.add(SeasonData(sNum, epList))
                 }
             }

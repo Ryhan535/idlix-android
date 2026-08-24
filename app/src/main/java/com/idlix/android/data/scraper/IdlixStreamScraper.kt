@@ -39,7 +39,7 @@ class IdlixStreamScraper(
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
@@ -224,7 +224,7 @@ class IdlixStreamScraper(
                 Thread {
                     try {
                         // Allow JS scripts on cold load to run and set cookies
-                        Thread.sleep(1200)
+                        Thread.sleep(400)
 
                         var uuid: String? = null
                         var playInfo: JSONObject? = null
@@ -533,9 +533,9 @@ class IdlixStreamScraper(
                         val kind = json.optString("kind", "")
                         val remainingMs = json.optLong("remainingMs", 0L)
                         if (kind == "pending" || remainingMs > 0) {
-                            val sleepTime = if (remainingMs in 1000..2500) remainingMs else 1500L
-                            Log.d(TAG, "claimSession pending ($remainingMs ms remaining). Waiting ${sleepTime}ms...")
-                            Thread.sleep(sleepTime)
+                            val waitMs = if (remainingMs > 0) (remainingMs + 250L).coerceIn(800L, 16000L) else 1200L
+                            Log.d(TAG, "claimSession pending ($remainingMs ms remaining). Waiting exact ${waitMs}ms...")
+                            Thread.sleep(waitMs)
                         } else {
                             break
                         }
